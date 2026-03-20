@@ -1,0 +1,51 @@
+# Build outputs
+build/
+bin/
+obj/
+out/
+dist/
+Debug/
+Release/
+x64/
+x86/
+
+# Test and coverage artifacts
+tests/test_all
+tests/test_all.exe
+tests/test_coverage
+tests/test_coverage.exe
+tests/*.gcda
+tests/*.gcno
+tests/*.gcov
+tests/coverage.info
+tests/coverage_html/
+
+# Generic binaries and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.cache
+
+# IDE and editor files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+git.txt

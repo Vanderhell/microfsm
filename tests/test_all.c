@@ -188,6 +188,7 @@ static void on_enter_a(void *user_data)
     log_phase(ctx, 1u);
     capture_current(ctx);
     maybe_reenter_dispatch(ctx, PHASE_INIT_ENTER);
+    maybe_reenter_reset(ctx, PHASE_RESET_ENTER);
 }
 
 static void on_enter_b(void *user_data)

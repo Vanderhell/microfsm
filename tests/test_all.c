@@ -369,7 +369,7 @@ TEST(test_validate_invalid_initial)
 
 TEST(test_validate_invalid_source)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(8u, EV_GO, ST_B, NULL, NULL)
     };
     const mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
@@ -379,7 +379,7 @@ TEST(test_validate_invalid_source)
 
 TEST(test_validate_invalid_destination)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, 8u, NULL, NULL)
     };
     const mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
@@ -389,7 +389,7 @@ TEST(test_validate_invalid_destination)
 
 TEST(test_validate_duplicate_unguarded)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
         MFSM_TRANSITION(ST_A, EV_GO, ST_C, NULL, NULL)
     };
@@ -400,7 +400,7 @@ TEST(test_validate_duplicate_unguarded)
 
 TEST(test_validate_exact_guarded_duplicate)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_allow, NULL),
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_allow, NULL)
     };
@@ -411,7 +411,7 @@ TEST(test_validate_exact_guarded_duplicate)
 
 TEST(test_validate_guarded_priority_chain)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL),
         MFSM_TRANSITION(ST_A, EV_GO, ST_C, guard_allow, NULL),
         MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
@@ -423,7 +423,7 @@ TEST(test_validate_guarded_priority_chain)
 
 TEST(test_validate_unguarded_fallback_final)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL),
         MFSM_TRANSITION(ST_A, EV_GO, ST_C, NULL, NULL),
         MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
@@ -435,7 +435,7 @@ TEST(test_validate_unguarded_fallback_final)
 
 TEST(test_validate_shadowed_after_fallback)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
         MFSM_TRANSITION(ST_A, EV_GO, ST_C, guard_allow, NULL),
         MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
@@ -447,12 +447,12 @@ TEST(test_validate_shadowed_after_fallback)
 
 TEST(test_validate_disconnected_cycle)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, NULL, "A"),
         MFSM_STATE(NULL, NULL, "B"),
         MFSM_STATE(NULL, NULL, "C")
     };
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_A, NULL, NULL),
         MFSM_TRANSITION(ST_B, EV_GO, ST_C, NULL, NULL),
         MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
@@ -464,11 +464,11 @@ TEST(test_validate_disconnected_cycle)
 
 TEST(test_validate_self_transition_with_unreachable_state)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, NULL, "A"),
         MFSM_STATE(NULL, NULL, "B")
     };
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_A, NULL, NULL)
     };
     const mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
@@ -478,7 +478,7 @@ TEST(test_validate_self_transition_with_unreachable_state)
 
 TEST(test_validate_reachable_graph)
 {
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
         MFSM_TRANSITION(ST_B, EV_GO, ST_C, NULL, NULL),
         MFSM_TRANSITION(ST_C, EV_GO, ST_A, NULL, NULL)
@@ -557,11 +557,11 @@ TEST(test_dispatch_order_and_visibility)
 
 TEST(test_guard_reject)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, NULL, "A"),
         MFSM_STATE(NULL, NULL, "B")
     };
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL)
     };
     test_ctx_t ctx;
@@ -607,6 +607,7 @@ TEST(test_mutated_destination_fails_closed)
     ctx_reset(&ctx);
     ctx.self = &fsm;
     ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    /* cppcheck-suppress unreadVariable */
     transitions[0].to = 99u;
     ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_dispatch(&fsm, EV_GO));
     ASSERT_UINT(0u, ctx.exits[ST_A]);
@@ -695,11 +696,11 @@ TEST(test_same_instance_reentrancy_from_trace)
 
 TEST(test_same_instance_reentrancy_from_reset_callbacks)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, on_exit_a, "A"),
         MFSM_STATE(on_enter_b, on_exit_b, "B")
     };
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
     };
     mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
@@ -715,6 +716,7 @@ TEST(test_same_instance_reentrancy_from_reset_callbacks)
     ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
     ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
 
+    ctx.nested_result = MFSM_OK;
     ctx.reenter_phase = PHASE_RESET_ENTER;
     ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
     ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
@@ -724,14 +726,14 @@ TEST(test_same_instance_reentrancy_from_reset_callbacks)
 
 TEST(test_nested_different_instance_dispatch)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, NULL, "A"),
         MFSM_STATE(NULL, NULL, "B")
     };
-    mfsm_transition_t peer_transitions[] = {
+    const mfsm_transition_t peer_transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
     };
-    mfsm_transition_t outer_transitions[] = {
+    const mfsm_transition_t outer_transitions[] = {
         MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, dispatch_peer_action)
     };
     mfsm_def_t peer_def = make_def(states, 2u, peer_transitions, 1u, ST_A);
@@ -756,11 +758,11 @@ TEST(test_nested_different_instance_dispatch)
 
 TEST(test_event_255_distinct_from_reset_trace)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(NULL, NULL, "A"),
         MFSM_STATE(NULL, NULL, "B")
     };
-    mfsm_transition_t transitions[] = {
+    const mfsm_transition_t transitions[] = {
         MFSM_TRANSITION(ST_A, EV_MAX, ST_B, NULL, NULL),
         MFSM_TRANSITION(ST_B, EV_GO, ST_A, NULL, NULL)
     };
@@ -783,7 +785,7 @@ TEST(test_event_255_distinct_from_reset_trace)
 
 TEST(test_reset_from_initial_runs_exit_and_enter)
 {
-    mfsm_state_t states[] = {
+    const mfsm_state_t states[] = {
         MFSM_STATE(on_enter_a, on_exit_a, "A")
     };
     mfsm_def_t def = make_def(states, 1u, NULL, 0u, ST_A);

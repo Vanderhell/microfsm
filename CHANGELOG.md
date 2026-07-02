@@ -2,9 +2,11 @@
 
 All notable changes to this project are documented here.
 
-The repository does not currently prove a released tag. No local tag matched a published version in the audited repository state, so corrective work remains under `Unreleased`.
-
 ## Unreleased
+
+- No unreleased changes recorded.
+
+## 1.0.0 - 2026-07-02
 
 ### Changed
 

@@ -722,7 +722,7 @@ TEST(test_same_instance_reentrancy_from_reset_exit_callback)
 TEST(test_same_instance_reentrancy_from_reset_enter_callback)
 {
     const mfsm_state_t states[] = {
-        MFSM_STATE(NULL, on_exit_a, "A"),
+        MFSM_STATE(on_enter_a, on_exit_a, "A"),
         MFSM_STATE(on_enter_b, on_exit_b, "B")
     };
     const mfsm_transition_t transitions[] = {

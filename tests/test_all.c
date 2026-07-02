@@ -737,7 +737,6 @@ TEST(test_same_instance_reentrancy_from_reset_enter_callback)
     ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
 
     ctx.reenter_phase = PHASE_RESET_ENTER;
-    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
     ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
     ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
     return true;

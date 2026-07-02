@@ -320,7 +320,11 @@ TEST(test_validate_max_states)
     }
 
     for (i = 0u; i < (uint16_t)(MFSM_MAX_STATES - 1u); ++i) {
-        transitions[i] = MFSM_TRANSITION((mfsm_state_id)i, EV_GO, (mfsm_state_id)(i + 1u), NULL, NULL);
+        transitions[i].from = (mfsm_state_id)i;
+        transitions[i].event = EV_GO;
+        transitions[i].to = (mfsm_state_id)(i + 1u);
+        transitions[i].guard = NULL;
+        transitions[i].action = NULL;
     }
 
     def = make_def(states, (uint16_t)MFSM_MAX_STATES, transitions, (uint16_t)(MFSM_MAX_STATES - 1u), 0u);

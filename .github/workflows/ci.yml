@@ -191,6 +191,7 @@ jobs:
           cmake -S . -B build
           -DCMAKE_C_COMPILER=arm-none-eabi-gcc
           -DCMAKE_C_STANDARD=99
+          -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
           "-DCMAKE_C_FLAGS=${{ matrix.flags }}"
       - name: Build library
         run: cmake --build build --target microfsm --parallel

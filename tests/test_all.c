@@ -694,7 +694,7 @@ TEST(test_same_instance_reentrancy_from_trace)
     return true;
 }
 
-TEST(test_same_instance_reentrancy_from_reset_callbacks)
+TEST(test_same_instance_reentrancy_from_reset_exit_callback)
 {
     const mfsm_state_t states[] = {
         MFSM_STATE(NULL, on_exit_a, "A"),
@@ -715,9 +715,27 @@ TEST(test_same_instance_reentrancy_from_reset_callbacks)
     ctx.reenter_phase = PHASE_RESET_EXIT;
     ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
     ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
 
-    ctx.reenter_phase = PHASE_NONE;
-    ctx.nested_result = MFSM_OK;
+TEST(test_same_instance_reentrancy_from_reset_enter_callback)
+{
+    const mfsm_state_t states[] = {
+        MFSM_STATE(NULL, on_exit_a, "A"),
+        MFSM_STATE(on_enter_b, on_exit_b, "B")
+    };
+    const mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
+    };
+    mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+
     ctx.reenter_phase = PHASE_RESET_ENTER;
     ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
     ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
@@ -883,7 +901,8 @@ int main(void)
     run_test("test_same_instance_reentrancy_from_action", test_same_instance_reentrancy_from_action);
     run_test("test_same_instance_reentrancy_from_enter", test_same_instance_reentrancy_from_enter);
     run_test("test_same_instance_reentrancy_from_trace", test_same_instance_reentrancy_from_trace);
-    run_test("test_same_instance_reentrancy_from_reset_callbacks", test_same_instance_reentrancy_from_reset_callbacks);
+    run_test("test_same_instance_reentrancy_from_reset_exit_callback", test_same_instance_reentrancy_from_reset_exit_callback);
+    run_test("test_same_instance_reentrancy_from_reset_enter_callback", test_same_instance_reentrancy_from_reset_enter_callback);
     run_test("test_nested_different_instance_dispatch", test_nested_different_instance_dispatch);
     run_test("test_event_255_distinct_from_reset_trace", test_event_255_distinct_from_reset_trace);
     run_test("test_reset_from_initial_runs_exit_and_enter", test_reset_from_initial_runs_exit_and_enter);

@@ -1,67 +1,24 @@
 # Security Policy
 
-## Supported Versions
+microfsm is a source-distributed library. This repository snapshot does not claim a hardened or fully verified release.
 
-microfsm is a small, source-distributed C library. Security fixes are applied
-to the latest published state of the repository.
+## Supported versions
 
-At this stage, support is provided for:
+Security fixes are expected against the latest maintained branch state rather than an asserted released series.
 
-| Version | Supported |
-|---------|-----------|
-| 1.x     | Yes       |
-| < 1.0   | No        |
+## Reporting a vulnerability
 
-## Reporting a Vulnerability
+Provide:
 
-If you believe you have found a security issue in microfsm, please report it
-responsibly and do not open a public issue with full exploit details first.
+- the affected file or commit
+- a minimal reproducer
+- the observed impact
+- any configuration details that matter
 
-Please include:
+If private security reporting is available on the hosting platform, use it. Otherwise open a minimal issue requesting a private contact path without publishing sensitive details.
 
-- A clear description of the issue
-- Affected version, commit, or file
-- Reproduction steps or a minimal proof of concept
-- Expected impact
-- Any suggested mitigation, if known
+## Scope notes
 
-## Preferred Disclosure Process
-
-Please contact the maintainer, Vanderhell, through the repository contact
-channel or a private security report mechanism if enabled on GitHub.
-
-If private reporting is not available yet, open a minimal issue requesting
-private contact without publishing sensitive technical details.
-
-## Response Expectations
-
-The project aims to:
-
-- Acknowledge receipt of a report within 7 days
-- Triage and assess impact as quickly as practical
-- Coordinate a fix before public disclosure when reasonable
-- Credit the reporter after disclosure, if they want attribution
-
-## Scope
-
-This policy applies to:
-
-- The C library source in `include/` and `src/`
-- Test and example code where a flaw could affect downstream users
-- Build and repository configuration that could impact consumers
-
-This policy does not guarantee fixes for issues caused solely by:
-
-- Unsupported toolchains or heavily modified downstream forks
-- Insecure application-specific integration code outside this repository
-- Misuse that contradicts documented API constraints
-
-## Security Notes for Users
-
-microfsm is designed to be small and predictable, but integrators are still
-responsible for:
-
-- Validating untrusted inputs before dispatching events
-- Avoiding unsafe callback behavior such as re-entrant dispatch
-- Reviewing compile-time configuration for their target environment
-- Testing their full application-level state transitions
+- The library validates machine definitions and runtime state, but application callbacks remain application code.
+- The library does not provide sandboxing, privilege separation, durable storage, rollback, or fault recovery.
+- ISR dispatch, asynchronous callback escape, and externally unsynchronized shared-instance use are out of contract.

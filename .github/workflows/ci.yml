@@ -3,46 +3,194 @@ name: CI
 on:
   push:
     branches:
-      - main
       - master
+      - main
   pull_request:
+    branches:
+      - master
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  test:
-    name: ${{ matrix.os }} / ${{ matrix.cc }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: Linux ${{ matrix.compiler }} ${{ matrix.standard }} names=${{ matrix.names }} trace=${{ matrix.trace }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            cc: gcc
-          - os: ubuntu-latest
-            cc: clang
-          - os: macos-latest
-            cc: clang
+          - compiler: gcc
+            c_standard: 99
+            standard: C99
+            names: ON
+            trace: ON
+          - compiler: gcc
+            c_standard: 11
+            standard: C11
+            names: OFF
+            trace: ON
+          - compiler: clang
+            c_standard: 99
+            standard: C99
+            names: ON
+            trace: OFF
+          - compiler: clang
+            c_standard: 11
+            standard: C11
+            names: OFF
+            trace: OFF
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DMFSM_BUILD_TESTS=ON
+          -DMFSM_ENABLE_NAMES=${{ matrix.names }}
+          -DMFSM_ENABLE_TRACE=${{ matrix.trace }}
+          -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_C_STANDARD=${{ matrix.c_standard }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
-      - name: Show toolchain
-        run: |
-          $CC --version
-          make --version
-        env:
-          CC: ${{ matrix.cc }}
+  short-enums:
+    name: Linux -fshort-enums
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DMFSM_BUILD_TESTS=ON
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_C_STANDARD=99
+          -DCMAKE_C_FLAGS=-fshort-enums
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
-      - name: Build and run tests
-        run: make clean all
-        working-directory: tests
-        env:
-          CC: ${{ matrix.cc }}
+  sanitizers:
+    name: Sanitizers ${{ matrix.kind }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: asan
+            compiler: clang
+            flags: -fsanitize=address
+          - kind: ubsan
+            compiler: clang
+            flags: -fsanitize=undefined
+          - kind: asan-ubsan
+            compiler: clang
+            flags: -fsanitize=address,undefined
+          - kind: tsan
+            compiler: clang
+            flags: -fsanitize=thread
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DMFSM_BUILD_TESTS=ON
+          -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_C_STANDARD=99
+          -DCMAKE_C_FLAGS=${{ matrix.flags }}
+          -DCMAKE_EXE_LINKER_FLAGS=${{ matrix.flags }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y cppcheck clang-tidy
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DMFSM_BUILD_TESTS=ON
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_C_STANDARD=99
+          -DCMAKE_C_CLANG_TIDY=clang-tidy
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Cppcheck
+        run: cppcheck --enable=warning,style,performance,portability --error-exitcode=1 --inline-suppr include src tests
+
+  windows-msvc:
+    name: Windows MSVC
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DMFSM_BUILD_TESTS=ON
+          -DCMAKE_C_STANDARD=11
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  consumers:
+    name: Install and consumers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure library
+        run: cmake -S . -B build -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+      - name: Build and install library
+        run: cmake --build build --target install --parallel
+      - name: Configure C find_package consumer
+        run: >
+          cmake -S tests/consumers/find_package_c -B build-consumer-c
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/install
+      - name: Build C find_package consumer
+        run: cmake --build build-consumer-c --parallel
+      - name: Configure C++ find_package consumer
+        run: >
+          cmake -S tests/consumers/find_package_cpp -B build-consumer-cpp
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/install
+      - name: Build C++ find_package consumer
+        run: cmake --build build-consumer-cpp --parallel
+      - name: Configure add_subdirectory consumer
+        run: >
+          cmake -S tests/consumers/add_subdirectory_c -B build-consumer-subdir
+          -DMICROFSM_SOURCE_DIR=${{ github.workspace }}
+      - name: Build add_subdirectory consumer
+        run: cmake --build build-consumer-subdir --parallel
+
+  arm:
+    name: ARM compile-only ${{ matrix.cpu }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cpu: cortex-m0
+            flags: -mcpu=cortex-m0 -mthumb
+          - cpu: cortex-m4
+            flags: -mcpu=cortex-m4 -mthumb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_C_COMPILER=arm-none-eabi-gcc
+          -DCMAKE_C_STANDARD=99
+          -DCMAKE_C_FLAGS=${{ matrix.flags }}
+      - name: Build library
+        run: cmake --build build --target microfsm --parallel

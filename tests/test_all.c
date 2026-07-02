@@ -1,567 +1,881 @@
 /*
- * microfsm test suite — minimal test framework + all test cases.
+ * microfsm contract tests.
  *
- * Build: gcc -std=c99 -Wall -Wextra -I../include ../src/mfsm.c test_all.c -o test_all
- * Run:   ./test_all
+ * Build example:
+ *   cc -std=c99 -Wall -Wextra -Wpedantic -I../include ../src/mfsm.c test_all.c -o test_all
  */
 
 #include "mfsm.h"
+
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
-/* ── Minimal test framework ────────────────────────────────────────────── */
+static unsigned int tests_run = 0u;
+static unsigned int tests_passed = 0u;
+static unsigned int tests_failed = 0u;
+static const char *failure_message = NULL;
+static int failure_line = 0;
 
-static int tests_run    = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
+static bool fail_at(const char *message, int line)
+{
+    failure_message = message;
+    failure_line = line;
+    return false;
+}
 
-#define TEST(name) static void name(void)
+#define TEST(name) static bool name(void)
 
-#define RUN_TEST(name) do {                                     \
-    tests_run++;                                                \
-    printf("  %-50s ", #name);                                  \
-    name();                                                     \
-    printf("PASS\n");                                           \
-    tests_passed++;                                             \
-} while (0)
+#define ASSERT_TRUE(expr) \
+    do { \
+        if (!(expr)) { \
+            return fail_at("assert true failed: " #expr, __LINE__); \
+        } \
+    } while (0)
 
-#define ASSERT_EQ(expected, actual) do {                        \
-    if ((expected) != (actual)) {                               \
-        printf("FAIL\n    %s:%d: expected %d, got %d\n",       \
-               __FILE__, __LINE__, (int)(expected), (int)(actual)); \
-        tests_failed++;                                         \
-        return;                                                 \
-    }                                                           \
-} while (0)
+#define ASSERT_FALSE(expr) \
+    do { \
+        if (expr) { \
+            return fail_at("assert false failed: " #expr, __LINE__); \
+        } \
+    } while (0)
 
-#define ASSERT_TRUE(expr) do {                                  \
-    if (!(expr)) {                                              \
-        printf("FAIL\n    %s:%d: expected true\n",              \
-               __FILE__, __LINE__);                             \
-        tests_failed++;                                         \
-        return;                                                 \
-    }                                                           \
-} while (0)
+#define ASSERT_STATUS(expected, actual) \
+    do { \
+        const mfsm_err_t actual_value__ = (actual); \
+        if ((expected) != actual_value__) { \
+            return fail_at("status mismatch", __LINE__); \
+        } \
+    } while (0)
 
-#define ASSERT_FALSE(expr) do {                                 \
-    if ((expr)) {                                               \
-        printf("FAIL\n    %s:%d: expected false\n",             \
-               __FILE__, __LINE__);                             \
-        tests_failed++;                                         \
-        return;                                                 \
-    }                                                           \
-} while (0)
+#define ASSERT_U8(expected, actual) \
+    do { \
+        const uint8_t actual_value__ = (uint8_t)(actual); \
+        if ((uint8_t)(expected) != actual_value__) { \
+            return fail_at("u8 mismatch", __LINE__); \
+        } \
+    } while (0)
 
-#define ASSERT_STR_EQ(expected, actual) do {                    \
-    if (strcmp((expected), (actual)) != 0) {                     \
-        printf("FAIL\n    %s:%d: expected \"%s\", got \"%s\"\n",\
-               __FILE__, __LINE__, (expected), (actual));       \
-        tests_failed++;                                         \
-        return;                                                 \
-    }                                                           \
-} while (0)
+#define ASSERT_UINT(expected, actual) \
+    do { \
+        const unsigned int actual_value__ = (unsigned int)(actual); \
+        if ((unsigned int)(expected) != actual_value__) { \
+            return fail_at("unsigned mismatch", __LINE__); \
+        } \
+    } while (0)
 
-/* ── Shared test fixtures ──────────────────────────────────────────────── */
+#define ASSERT_PTR(expected, actual) \
+    do { \
+        const void *actual_value__ = (const void *)(actual); \
+        if ((const void *)(expected) != actual_value__) { \
+            return fail_at("pointer mismatch", __LINE__); \
+        } \
+    } while (0)
 
-enum { ST_A, ST_B, ST_C, ST_TEST_COUNT };
-enum { EV_GO, EV_BACK, EV_FAIL, EV_GUARD };
+#define ASSERT_STR(expected, actual) \
+    do { \
+        const char *actual_value__ = (actual); \
+        if (((expected) == NULL && actual_value__ != NULL) || \
+            ((expected) != NULL && actual_value__ == NULL) || \
+            ((expected) != NULL && strcmp((expected), actual_value__) != 0)) { \
+            return fail_at("string mismatch", __LINE__); \
+        } \
+    } while (0)
 
-/* Tracking context for action callbacks */
+static void run_test(const char *name, bool (*fn)(void))
+{
+    const bool passed = fn();
+
+    ++tests_run;
+    if (passed) {
+        ++tests_passed;
+        printf("PASS %s\n", name);
+        return;
+    }
+
+    ++tests_failed;
+    printf("FAIL %s:%d %s\n", name, failure_line, failure_message);
+}
+
+enum {
+    ST_A = 0,
+    ST_B = 1,
+    ST_C = 2,
+    ST_D = 3
+};
+
+enum {
+    EV_GO = 1,
+    EV_ALT = 2,
+    EV_RESET = 3,
+    EV_MAX = 255
+};
+
+enum callback_phase {
+    PHASE_NONE = 0,
+    PHASE_INIT_ENTER,
+    PHASE_GUARD,
+    PHASE_EXIT,
+    PHASE_ACTION,
+    PHASE_ENTER,
+    PHASE_TRACE,
+    PHASE_RESET_EXIT,
+    PHASE_RESET_ENTER
+};
+
 typedef struct {
-    int enter_count[3];
-    int exit_count[3];
-    int action_count;
-    int guard_calls;
-    bool guard_result;
+    mfsm_t *self;
+    mfsm_t *peer;
+    enum callback_phase reenter_phase;
+    enum callback_phase last_phase;
+    mfsm_err_t nested_result;
+    mfsm_err_t peer_result;
+    mfsm_state_id observed_state;
+    uint8_t sequence[16];
+    uint8_t sequence_len;
+    uint8_t enters[4];
+    uint8_t exits[4];
+    uint8_t actions;
+    uint8_t guard_calls;
+    uint8_t trace_calls;
+    mfsm_trace_record_t last_trace;
 } test_ctx_t;
 
-static void reset_ctx(test_ctx_t *ctx) {
+static void ctx_reset(test_ctx_t *ctx)
+{
     memset(ctx, 0, sizeof(*ctx));
-    ctx->guard_result = true;
+    ctx->nested_result = MFSM_OK;
+    ctx->peer_result = MFSM_OK;
 }
 
-static void on_enter_a(void *ud) { ((test_ctx_t *)ud)->enter_count[ST_A]++; }
-static void on_enter_b(void *ud) { ((test_ctx_t *)ud)->enter_count[ST_B]++; }
-static void on_enter_c(void *ud) { ((test_ctx_t *)ud)->enter_count[ST_C]++; }
-static void on_exit_a(void *ud)  { ((test_ctx_t *)ud)->exit_count[ST_A]++; }
-static void on_exit_b(void *ud)  { ((test_ctx_t *)ud)->exit_count[ST_B]++; }
-
-static void on_transition(void *ud) { ((test_ctx_t *)ud)->action_count++; }
-
-static bool guard_check(void *ud) {
-    test_ctx_t *ctx = (test_ctx_t *)ud;
-    ctx->guard_calls++;
-    return ctx->guard_result;
-}
-
-static const mfsm_state_t test_states[] = {
-    [ST_A] = { .on_enter = on_enter_a, .on_exit = on_exit_a, .name = "A" },
-    [ST_B] = { .on_enter = on_enter_b, .on_exit = on_exit_b, .name = "B" },
-    [ST_C] = { .on_enter = on_enter_c, .on_exit = NULL,      .name = "C" },
-};
-
-static const mfsm_transition_t test_transitions[] = {
-    { ST_A, EV_GO,    ST_B, NULL,        on_transition },
-    { ST_B, EV_GO,    ST_C, NULL,        NULL          },
-    { ST_B, EV_BACK,  ST_A, NULL,        NULL          },
-    { ST_C, EV_BACK,  ST_A, NULL,        NULL          },
-    { ST_A, EV_GUARD, ST_C, guard_check, NULL          },
-};
-
-static const mfsm_def_t test_def = {
-    .states          = test_states,
-    .num_states      = ST_TEST_COUNT,
-    .transitions     = test_transitions,
-    .num_transitions = sizeof(test_transitions) / sizeof(test_transitions[0]),
-    .initial         = ST_A,
-};
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Core
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_init_sets_initial_state) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    ASSERT_EQ(MFSM_OK, mfsm_init(&fsm, &test_def, &ctx));
-    ASSERT_EQ(ST_A, mfsm_current(&fsm));
-}
-
-TEST(test_init_calls_on_enter) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_EQ(1, ctx.enter_count[ST_A]);
-}
-
-TEST(test_init_null_fsm) {
-    ASSERT_EQ(MFSM_ERR_NULL, mfsm_init(NULL, &test_def, NULL));
-}
-
-TEST(test_init_null_def) {
-    mfsm_t fsm;
-    ASSERT_EQ(MFSM_ERR_NULL, mfsm_init(&fsm, NULL, NULL));
-}
-
-TEST(test_init_invalid_initial) {
-    mfsm_def_t bad_def = test_def;
-    bad_def.initial = 99;
-    mfsm_t fsm;
-    ASSERT_EQ(MFSM_ERR_INVALID_STATE, mfsm_init(&fsm, &bad_def, NULL));
-}
-
-TEST(test_dispatch_basic_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_EQ(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
-    ASSERT_EQ(ST_B, mfsm_current(&fsm));
-}
-
-TEST(test_dispatch_chain) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B */
-    mfsm_dispatch(&fsm, EV_GO);   /* B → C */
-    ASSERT_EQ(ST_C, mfsm_current(&fsm));
-}
-
-TEST(test_dispatch_no_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_EQ(MFSM_ERR_NO_TRANSITION, mfsm_dispatch(&fsm, EV_FAIL));
-    ASSERT_EQ(ST_A, mfsm_current(&fsm));  /* stays in A */
-}
-
-TEST(test_dispatch_null_fsm) {
-    ASSERT_EQ(MFSM_ERR_NULL, mfsm_dispatch(NULL, EV_GO));
-}
-
-TEST(test_reset) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B */
-    ASSERT_EQ(ST_B, mfsm_current(&fsm));
-    ASSERT_EQ(MFSM_OK, mfsm_reset(&fsm));
-    ASSERT_EQ(ST_A, mfsm_current(&fsm));
-}
-
-TEST(test_reset_calls_exit_and_enter) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B */
-
-    /* Reset counters */
-    memset(ctx.enter_count, 0, sizeof(ctx.enter_count));
-    memset(ctx.exit_count, 0, sizeof(ctx.exit_count));
-
-    mfsm_reset(&fsm);  /* B → A */
-    ASSERT_EQ(1, ctx.exit_count[ST_B]);
-    ASSERT_EQ(1, ctx.enter_count[ST_A]);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Actions
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_exit_action_called_on_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B */
-    ASSERT_EQ(1, ctx.exit_count[ST_A]);
-}
-
-TEST(test_enter_action_called_on_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B */
-    ASSERT_EQ(1, ctx.enter_count[ST_B]);
-}
-
-TEST(test_transition_action_called) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_dispatch(&fsm, EV_GO);   /* A → B, has transition action */
-    ASSERT_EQ(1, ctx.action_count);
-}
-
-TEST(test_no_actions_on_unhandled_event) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-
-    /* Reset after init */
-    memset(ctx.enter_count, 0, sizeof(ctx.enter_count));
-    memset(ctx.exit_count, 0, sizeof(ctx.exit_count));
-    ctx.action_count = 0;
-
-    mfsm_dispatch(&fsm, EV_FAIL);  /* no transition from A on EV_FAIL */
-    ASSERT_EQ(0, ctx.exit_count[ST_A]);
-    ASSERT_EQ(0, ctx.enter_count[ST_A]);
-    ASSERT_EQ(0, ctx.action_count);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Guards
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_guard_allows_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    ctx.guard_result = true;
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_EQ(MFSM_OK, mfsm_dispatch(&fsm, EV_GUARD));
-    ASSERT_EQ(ST_C, mfsm_current(&fsm));
-    ASSERT_EQ(1, ctx.guard_calls);
-}
-
-TEST(test_guard_rejects_transition) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    ctx.guard_result = false;
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_EQ(MFSM_ERR_GUARD_REJECT, mfsm_dispatch(&fsm, EV_GUARD));
-    ASSERT_EQ(ST_A, mfsm_current(&fsm));  /* stays in A */
-    ASSERT_EQ(1, ctx.guard_calls);
-}
-
-TEST(test_guard_no_side_effects_on_reject) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    ctx.guard_result = false;
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-
-    /* Reset after init */
-    memset(ctx.exit_count, 0, sizeof(ctx.exit_count));
-    ctx.action_count = 0;
-
-    mfsm_dispatch(&fsm, EV_GUARD);
-    ASSERT_EQ(0, ctx.exit_count[ST_A]);   /* on_exit NOT called */
-    ASSERT_EQ(0, ctx.enter_count[ST_C]);  /* on_enter NOT called (except init) */
-    ASSERT_EQ(0, ctx.action_count);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Query functions
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_state_name) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_STR_EQ("A", mfsm_state_name(&fsm));
-    mfsm_dispatch(&fsm, EV_GO);
-    ASSERT_STR_EQ("B", mfsm_state_name(&fsm));
-}
-
-TEST(test_state_name_null) {
-    ASSERT_STR_EQ("?", mfsm_state_name(NULL));
-}
-
-TEST(test_can_handle_true) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_TRUE(mfsm_can_handle(&fsm, EV_GO));
-}
-
-TEST(test_can_handle_false) {
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    ASSERT_FALSE(mfsm_can_handle(&fsm, EV_FAIL));
-}
-
-TEST(test_can_handle_null) {
-    ASSERT_FALSE(mfsm_can_handle(NULL, EV_GO));
-}
-
-TEST(test_current_null) {
-    ASSERT_EQ(0, mfsm_current(NULL));
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Validation
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_validate_ok) {
-    ASSERT_EQ(MFSM_OK, mfsm_validate(&test_def));
-}
-
-TEST(test_validate_null) {
-    ASSERT_EQ(MFSM_ERR_NULL, mfsm_validate(NULL));
-}
-
-TEST(test_validate_invalid_initial) {
-    mfsm_def_t bad = test_def;
-    bad.initial = 99;
-    ASSERT_EQ(MFSM_ERR_INVALID_STATE, mfsm_validate(&bad));
-}
-
-TEST(test_validate_invalid_transition_state) {
-    static const mfsm_transition_t bad_trans[] = {
-        { 0, 0, 99, NULL, NULL },  /* to = 99, out of range */
-    };
-    static const mfsm_state_t one_state[] = {
-        { .name = "ONLY" },
-    };
-    mfsm_def_t bad = {
-        .states = one_state, .num_states = 1,
-        .transitions = bad_trans, .num_transitions = 1,
-        .initial = 0,
-    };
-    ASSERT_EQ(MFSM_ERR_INVALID_STATE, mfsm_validate(&bad));
-}
-
-TEST(test_validate_duplicate_unguarded) {
-    static const mfsm_transition_t dup_trans[] = {
-        { 0, 0, 1, NULL, NULL },
-        { 0, 0, 1, NULL, NULL },  /* same (from, event), no guards */
-    };
-    static const mfsm_state_t two_states[] = {
-        { .name = "A" }, { .name = "B" },
-    };
-    mfsm_def_t bad = {
-        .states = two_states, .num_states = 2,
-        .transitions = dup_trans, .num_transitions = 2,
-        .initial = 0,
-    };
-    ASSERT_EQ(MFSM_ERR_DUPLICATE, mfsm_validate(&bad));
-}
-
-TEST(test_validate_duplicate_with_guards_ok) {
-    /* Same (from, event) but both have guards — this is intentional priority */
-    static const mfsm_transition_t guarded_trans[] = {
-        { 0, 0, 1, guard_check, NULL },
-        { 0, 0, 1, guard_check, NULL },
-    };
-    static const mfsm_state_t two_states[] = {
-        { .name = "A" }, { .name = "B" },
-    };
-    mfsm_def_t ok = {
-        .states = two_states, .num_states = 2,
-        .transitions = guarded_trans, .num_transitions = 2,
-        .initial = 0,
-    };
-    ASSERT_EQ(MFSM_OK, mfsm_validate(&ok));
-}
-
-TEST(test_validate_unreachable) {
-    /* State 1 exists but no transition leads to it */
-    static const mfsm_transition_t no_reach[] = {
-        { 0, 0, 0, NULL, NULL },  /* self-transition, never goes to state 1 */
-    };
-    static const mfsm_state_t two_states[] = {
-        { .name = "A" }, { .name = "B" },
-    };
-    mfsm_def_t bad = {
-        .states = two_states, .num_states = 2,
-        .transitions = no_reach, .num_transitions = 1,
-        .initial = 0,
-    };
-    ASSERT_EQ(MFSM_ERR_UNREACHABLE, mfsm_validate(&bad));
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Trace
- * ══════════════════════════════════════════════════════════════════════════ */
-
-static int trace_call_count = 0;
-static mfsm_state_id trace_from, trace_to;
-static mfsm_event_id trace_event;
-
-static void test_trace_fn(mfsm_state_id from, mfsm_event_id event,
-                          mfsm_state_id to, void *ud) {
-    (void)ud;
-    trace_call_count++;
-    trace_from  = from;
-    trace_event = event;
-    trace_to    = to;
-}
-
-TEST(test_trace_called) {
-    trace_call_count = 0;
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_set_trace(&fsm, test_trace_fn);
-    mfsm_dispatch(&fsm, EV_GO);
-    ASSERT_EQ(1, trace_call_count);
-    ASSERT_EQ(ST_A, trace_from);
-    ASSERT_EQ(EV_GO, trace_event);
-    ASSERT_EQ(ST_B, trace_to);
-}
-
-TEST(test_trace_not_called_on_failure) {
-    trace_call_count = 0;
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &test_def, &ctx);
-    mfsm_set_trace(&fsm, test_trace_fn);
-    mfsm_dispatch(&fsm, EV_FAIL);  /* no transition */
-    ASSERT_EQ(0, trace_call_count);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Test cases: Edge cases
- * ══════════════════════════════════════════════════════════════════════════ */
-
-TEST(test_self_transition) {
-    /* A → A self-transition */
-    static const mfsm_state_t self_states[] = {
-        { .on_enter = on_enter_a, .on_exit = on_exit_a, .name = "A" },
-    };
-    static const mfsm_transition_t self_trans[] = {
-        { 0, 0, 0, NULL, NULL },  /* self-transition */
-    };
-    mfsm_def_t self_def = {
-        .states = self_states, .num_states = 1,
-        .transitions = self_trans, .num_transitions = 1,
-        .initial = 0,
-    };
-    test_ctx_t ctx; reset_ctx(&ctx);
-    mfsm_t fsm;
-    mfsm_init(&fsm, &self_def, &ctx);
-    /* After init: enter_count[A] = 1 */
-    mfsm_dispatch(&fsm, 0);
-    /* After self-transition: exit + enter = exit_count[A]=1, enter_count[A]=2 */
-    ASSERT_EQ(0, mfsm_current(&fsm));
-    ASSERT_EQ(1, ctx.exit_count[ST_A]);
-    ASSERT_EQ(2, ctx.enter_count[ST_A]);
-}
-
-TEST(test_err_str) {
-    ASSERT_STR_EQ("ok",            mfsm_err_str(MFSM_OK));
-    ASSERT_STR_EQ("null pointer",  mfsm_err_str(MFSM_ERR_NULL));
-    ASSERT_STR_EQ("no transition", mfsm_err_str(MFSM_ERR_NO_TRANSITION));
-    ASSERT_STR_EQ("guard rejected", mfsm_err_str(MFSM_ERR_GUARD_REJECT));
-    ASSERT_STR_EQ("unknown error", mfsm_err_str((mfsm_err_t)99));
-}
-
-TEST(test_multiple_instances_shared_def) {
-    test_ctx_t ctx1, ctx2;
-    reset_ctx(&ctx1);
-    reset_ctx(&ctx2);
-    mfsm_t fsm1, fsm2;
-    mfsm_init(&fsm1, &test_def, &ctx1);
-    mfsm_init(&fsm2, &test_def, &ctx2);
-
-    mfsm_dispatch(&fsm1, EV_GO);  /* fsm1: A → B */
-    /* fsm2 should still be in A */
-    ASSERT_EQ(ST_B, mfsm_current(&fsm1));
-    ASSERT_EQ(ST_A, mfsm_current(&fsm2));
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
- * Main
- * ══════════════════════════════════════════════════════════════════════════ */
-
-int main(void) {
-    printf("\n=== microfsm test suite ===\n\n");
-
-    printf("[Core]\n");
-    RUN_TEST(test_init_sets_initial_state);
-    RUN_TEST(test_init_calls_on_enter);
-    RUN_TEST(test_init_null_fsm);
-    RUN_TEST(test_init_null_def);
-    RUN_TEST(test_init_invalid_initial);
-    RUN_TEST(test_dispatch_basic_transition);
-    RUN_TEST(test_dispatch_chain);
-    RUN_TEST(test_dispatch_no_transition);
-    RUN_TEST(test_dispatch_null_fsm);
-    RUN_TEST(test_reset);
-    RUN_TEST(test_reset_calls_exit_and_enter);
-
-    printf("\n[Actions]\n");
-    RUN_TEST(test_exit_action_called_on_transition);
-    RUN_TEST(test_enter_action_called_on_transition);
-    RUN_TEST(test_transition_action_called);
-    RUN_TEST(test_no_actions_on_unhandled_event);
-
-    printf("\n[Guards]\n");
-    RUN_TEST(test_guard_allows_transition);
-    RUN_TEST(test_guard_rejects_transition);
-    RUN_TEST(test_guard_no_side_effects_on_reject);
-
-    printf("\n[Query]\n");
-    RUN_TEST(test_state_name);
-    RUN_TEST(test_state_name_null);
-    RUN_TEST(test_can_handle_true);
-    RUN_TEST(test_can_handle_false);
-    RUN_TEST(test_can_handle_null);
-    RUN_TEST(test_current_null);
-
-    printf("\n[Validation]\n");
-    RUN_TEST(test_validate_ok);
-    RUN_TEST(test_validate_null);
-    RUN_TEST(test_validate_invalid_initial);
-    RUN_TEST(test_validate_invalid_transition_state);
-    RUN_TEST(test_validate_duplicate_unguarded);
-    RUN_TEST(test_validate_duplicate_with_guards_ok);
-    RUN_TEST(test_validate_unreachable);
-
-    printf("\n[Trace]\n");
-    RUN_TEST(test_trace_called);
-    RUN_TEST(test_trace_not_called_on_failure);
-
-    printf("\n[Edge Cases]\n");
-    RUN_TEST(test_self_transition);
-    RUN_TEST(test_err_str);
-    RUN_TEST(test_multiple_instances_shared_def);
-
-    printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
-    if (tests_failed > 0) {
-        printf(", %d FAILED", tests_failed);
+static void log_phase(test_ctx_t *ctx, uint8_t marker)
+{
+    if (ctx->sequence_len < (uint8_t)sizeof(ctx->sequence)) {
+        ctx->sequence[ctx->sequence_len++] = marker;
     }
-    printf(" ===\n\n");
+}
 
-    return tests_failed > 0 ? 1 : 0;
+static void capture_current(test_ctx_t *ctx)
+{
+    mfsm_state_id current = 0u;
+
+    if (ctx->self != NULL && mfsm_current(ctx->self, &current) == MFSM_OK) {
+        ctx->observed_state = current;
+    }
+}
+
+static void maybe_reenter_dispatch(test_ctx_t *ctx, enum callback_phase phase)
+{
+    if (ctx->reenter_phase == phase) {
+        ctx->nested_result = mfsm_dispatch(ctx->self, EV_ALT);
+    }
+}
+
+static void maybe_reenter_reset(test_ctx_t *ctx, enum callback_phase phase)
+{
+    if (ctx->reenter_phase == phase) {
+        ctx->nested_result = mfsm_reset(ctx->self);
+    }
+}
+
+static void on_enter_a(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ctx->last_phase = ctx->self != NULL && !ctx->self->busy ? PHASE_NONE : PHASE_INIT_ENTER;
+    ++ctx->enters[ST_A];
+    log_phase(ctx, 1u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_INIT_ENTER);
+}
+
+static void on_enter_b(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->enters[ST_B];
+    log_phase(ctx, 4u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_ENTER);
+    maybe_reenter_reset(ctx, PHASE_RESET_ENTER);
+}
+
+static void on_enter_c(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->enters[ST_C];
+    log_phase(ctx, 9u);
+}
+
+static void on_exit_a(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->exits[ST_A];
+    log_phase(ctx, 2u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_EXIT);
+}
+
+static void on_exit_b(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->exits[ST_B];
+    log_phase(ctx, 7u);
+    capture_current(ctx);
+    maybe_reenter_reset(ctx, PHASE_RESET_EXIT);
+}
+
+static void action_go(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->actions;
+    log_phase(ctx, 3u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_ACTION);
+}
+
+static bool guard_allow(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->guard_calls;
+    log_phase(ctx, 5u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_GUARD);
+    return true;
+}
+
+static bool guard_false(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->guard_calls;
+    return false;
+}
+
+static void trace_capture(const mfsm_trace_record_t *record, void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    ++ctx->trace_calls;
+    ctx->last_trace = *record;
+    log_phase(ctx, 6u);
+    capture_current(ctx);
+    maybe_reenter_dispatch(ctx, PHASE_TRACE);
+}
+
+static void dispatch_peer_action(void *user_data)
+{
+    test_ctx_t *ctx = (test_ctx_t *)user_data;
+    if (ctx->peer != NULL) {
+        ctx->peer_result = mfsm_dispatch(ctx->peer, EV_GO);
+    }
+}
+
+static const mfsm_state_t core_states[] = {
+    MFSM_STATE(on_enter_a, on_exit_a, "A"),
+    MFSM_STATE(on_enter_b, on_exit_b, "B"),
+    MFSM_STATE(on_enter_c, NULL, "C")
+};
+
+static const mfsm_transition_t core_transitions[] = {
+    MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_allow, action_go),
+    MFSM_TRANSITION(ST_A, EV_ALT, ST_C, NULL, NULL),
+    MFSM_TRANSITION(ST_B, EV_GO, ST_A, NULL, NULL)
+};
+
+static const mfsm_def_t core_def = MFSM_DEF(
+    core_states,
+    core_transitions,
+    3u,
+    3u,
+    ST_A
+);
+
+static mfsm_def_t make_def(
+    const mfsm_state_t *states,
+    uint16_t num_states,
+    const mfsm_transition_t *transitions,
+    uint16_t num_transitions,
+    mfsm_state_id initial)
+{
+    const mfsm_def_t def = MFSM_DEF(states, transitions, num_states, num_transitions, initial);
+    return def;
+}
+
+TEST(test_validate_zero_states)
+{
+    const mfsm_def_t def = make_def(core_states, 0u, NULL, 0u, 0u);
+    ASSERT_STATUS(MFSM_ERR_LIMIT, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_max_states)
+{
+    mfsm_state_t states[MFSM_MAX_STATES];
+    const mfsm_def_t def = make_def(states, (uint16_t)MFSM_MAX_STATES, NULL, 0u, 0u);
+    uint16_t i;
+
+    memset(states, 0, sizeof(states));
+    for (i = 0u; i < (uint16_t)MFSM_MAX_STATES; ++i) {
+        states[i].name = "S";
+    }
+
+    ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_excessive_states)
+{
+    const mfsm_def_t def = make_def(core_states, (uint16_t)(MFSM_MAX_STATES + 1u), NULL, 0u, 0u);
+    ASSERT_STATUS(MFSM_ERR_LIMIT, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_zero_transitions_with_null_pointer)
+{
+    const mfsm_def_t def = make_def(core_states, 3u, NULL, 0u, ST_A);
+    ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_nonzero_transitions_with_null_pointer)
+{
+    const mfsm_def_t def = make_def(core_states, 3u, NULL, 1u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_NULL, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_excessive_transitions)
+{
+    const mfsm_def_t def = make_def(core_states, 3u, core_transitions, (uint16_t)(MFSM_MAX_TRANSITIONS + 1u), ST_A);
+    ASSERT_STATUS(MFSM_ERR_LIMIT, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_invalid_initial)
+{
+    const mfsm_def_t def = make_def(core_states, 3u, core_transitions, 3u, 8u);
+    ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_invalid_source)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(8u, EV_GO, ST_B, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_invalid_destination)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, 8u, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_duplicate_unguarded)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
+        MFSM_TRANSITION(ST_A, EV_GO, ST_C, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 2u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_DUPLICATE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_exact_guarded_duplicate)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_allow, NULL),
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_allow, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 2u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_DUPLICATE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_guarded_priority_chain)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL),
+        MFSM_TRANSITION(ST_A, EV_GO, ST_C, guard_allow, NULL),
+        MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 3u, ST_A);
+    ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_unguarded_fallback_final)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL),
+        MFSM_TRANSITION(ST_A, EV_GO, ST_C, NULL, NULL),
+        MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 3u, ST_A);
+    ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_shadowed_after_fallback)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
+        MFSM_TRANSITION(ST_A, EV_GO, ST_C, guard_allow, NULL),
+        MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 3u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_SHADOWED, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_disconnected_cycle)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, NULL, "A"),
+        MFSM_STATE(NULL, NULL, "B"),
+        MFSM_STATE(NULL, NULL, "C")
+    };
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_A, NULL, NULL),
+        MFSM_TRANSITION(ST_B, EV_GO, ST_C, NULL, NULL),
+        MFSM_TRANSITION(ST_C, EV_GO, ST_B, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(states, 3u, transitions, 3u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_UNREACHABLE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_self_transition_with_unreachable_state)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, NULL, "A"),
+        MFSM_STATE(NULL, NULL, "B")
+    };
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_A, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
+    ASSERT_STATUS(MFSM_ERR_UNREACHABLE, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_validate_reachable_graph)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
+        MFSM_TRANSITION(ST_B, EV_GO, ST_C, NULL, NULL),
+        MFSM_TRANSITION(ST_C, EV_GO, ST_A, NULL, NULL)
+    };
+    const mfsm_def_t def = make_def(core_states, 3u, transitions, 3u, ST_A);
+    ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
+    return true;
+}
+
+TEST(test_init_and_query)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    mfsm_state_id current = 0u;
+    const char *name = NULL;
+    bool exists = false;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm, &current));
+    ASSERT_STATUS(MFSM_OK, mfsm_state_name(&fsm, &name));
+    ASSERT_STATUS(MFSM_OK, mfsm_has_transition(&fsm, EV_GO, &exists));
+    ASSERT_U8(ST_A, current);
+    ASSERT_STR("A", name);
+    ASSERT_TRUE(exists);
+    ASSERT_U8(1u, ctx.enters[ST_A]);
+    return true;
+}
+
+TEST(test_uninitialized_instance)
+{
+    mfsm_t fsm;
+    mfsm_state_id current = 99u;
+    bool exists = true;
+    memset(&fsm, 0, sizeof(fsm));
+    ASSERT_STATUS(MFSM_ERR_UNINITIALIZED, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_UNINITIALIZED, mfsm_reset(&fsm));
+    ASSERT_STATUS(MFSM_ERR_UNINITIALIZED, mfsm_current(&fsm, &current));
+    ASSERT_STATUS(MFSM_ERR_UNINITIALIZED, mfsm_has_transition(&fsm, EV_GO, &exists));
+    ASSERT_U8(99u, current);
+    ASSERT_TRUE(exists);
+    return true;
+}
+
+TEST(test_dispatch_order_and_visibility)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    mfsm_state_id current = 0u;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_set_trace(&fsm, trace_capture));
+    memset(ctx.sequence, 0, sizeof(ctx.sequence));
+    ctx.sequence_len = 0u;
+
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm, &current));
+    ASSERT_U8(ST_B, current);
+    ASSERT_UINT(5u, ctx.sequence_len);
+    ASSERT_U8(5u, ctx.sequence[0]);
+    ASSERT_U8(2u, ctx.sequence[1]);
+    ASSERT_U8(3u, ctx.sequence[2]);
+    ASSERT_U8(4u, ctx.sequence[3]);
+    ASSERT_U8(6u, ctx.sequence[4]);
+    ASSERT_U8(ST_B, ctx.observed_state);
+    ASSERT_U8(MFSM_TRACE_KIND_TRANSITION, ctx.last_trace.kind);
+    ASSERT_U8(ST_A, ctx.last_trace.from);
+    ASSERT_U8(EV_GO, ctx.last_trace.event);
+    ASSERT_U8(ST_B, ctx.last_trace.to);
+    return true;
+}
+
+TEST(test_guard_reject)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, NULL, "A"),
+        MFSM_STATE(NULL, NULL, "B")
+    };
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, guard_false, NULL)
+    };
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    mfsm_state_id current = 0u;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    const mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    ASSERT_STATUS(MFSM_ERR_GUARD_REJECT, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm, &current));
+    ASSERT_U8(ST_A, current);
+    ASSERT_UINT(1u, ctx.guard_calls);
+    return true;
+}
+
+TEST(test_invalid_current_state_fails_closed)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    fsm.current = 99u;
+    ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_UINT(0u, ctx.exits[ST_A]);
+    ASSERT_UINT(1u, ctx.enters[ST_A]);
+    return true;
+}
+
+TEST(test_mutated_destination_fails_closed)
+{
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
+    };
+    mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    transitions[0].to = 99u;
+    ASSERT_STATUS(MFSM_ERR_INVALID_STATE, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_UINT(0u, ctx.exits[ST_A]);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_init_enter)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_INIT_ENTER;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_guard)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_GUARD;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_exit)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_EXIT;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_action)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_ACTION;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_enter)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_ENTER;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_trace)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_TRACE;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_set_trace(&fsm, trace_capture));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_same_instance_reentrancy_from_reset_callbacks)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, on_exit_a, "A"),
+        MFSM_STATE(on_enter_b, on_exit_b, "B")
+    };
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
+    };
+    mfsm_def_t def = make_def(states, 2u, transitions, 1u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+
+    ctx.reenter_phase = PHASE_RESET_EXIT;
+    ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+
+    ctx.reenter_phase = PHASE_RESET_ENTER;
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    return true;
+}
+
+TEST(test_nested_different_instance_dispatch)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, NULL, "A"),
+        MFSM_STATE(NULL, NULL, "B")
+    };
+    mfsm_transition_t peer_transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
+    };
+    mfsm_transition_t outer_transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, dispatch_peer_action)
+    };
+    mfsm_def_t peer_def = make_def(states, 2u, peer_transitions, 1u, ST_A);
+    mfsm_def_t outer_def = make_def(states, 2u, outer_transitions, 1u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t outer_fsm;
+    mfsm_t peer_fsm;
+    mfsm_state_id current = 0u;
+
+    ctx_reset(&ctx);
+    ctx.self = &outer_fsm;
+    ctx.peer = &peer_fsm;
+
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&peer_fsm, &peer_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&outer_fsm, &outer_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&outer_fsm, EV_GO));
+    ASSERT_STATUS(MFSM_OK, ctx.peer_result);
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&peer_fsm, &current));
+    ASSERT_U8(ST_B, current);
+    return true;
+}
+
+TEST(test_event_255_distinct_from_reset_trace)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(NULL, NULL, "A"),
+        MFSM_STATE(NULL, NULL, "B")
+    };
+    mfsm_transition_t transitions[] = {
+        MFSM_TRANSITION(ST_A, EV_MAX, ST_B, NULL, NULL),
+        MFSM_TRANSITION(ST_B, EV_GO, ST_A, NULL, NULL)
+    };
+    mfsm_def_t def = make_def(states, 2u, transitions, 2u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_set_trace(&fsm, trace_capture));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_MAX));
+    ASSERT_U8(MFSM_TRACE_KIND_TRANSITION, ctx.last_trace.kind);
+    ASSERT_U8(EV_MAX, ctx.last_trace.event);
+    ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
+    ASSERT_U8(MFSM_TRACE_KIND_RESET, ctx.last_trace.kind);
+    ASSERT_U8(0u, ctx.last_trace.event);
+    return true;
+}
+
+TEST(test_reset_from_initial_runs_exit_and_enter)
+{
+    mfsm_state_t states[] = {
+        MFSM_STATE(on_enter_a, on_exit_a, "A")
+    };
+    mfsm_def_t def = make_def(states, 1u, NULL, 0u, ST_A);
+    test_ctx_t ctx;
+    mfsm_t fsm;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_reset(&fsm));
+    ASSERT_UINT(2u, ctx.enters[ST_A]);
+    ASSERT_UINT(1u, ctx.exits[ST_A]);
+    return true;
+}
+
+TEST(test_multiple_instances_share_definition)
+{
+    test_ctx_t ctx_a;
+    test_ctx_t ctx_b;
+    mfsm_t fsm_a;
+    mfsm_t fsm_b;
+    mfsm_state_id current_a = 0u;
+    mfsm_state_id current_b = 0u;
+
+    ctx_reset(&ctx_a);
+    ctx_reset(&ctx_b);
+    ctx_a.self = &fsm_a;
+    ctx_b.self = &fsm_b;
+
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm_a, &core_def, &ctx_a));
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm_b, &core_def, &ctx_b));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm_a, EV_GO));
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm_a, &current_a));
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm_b, &current_b));
+    ASSERT_U8(ST_B, current_a);
+    ASSERT_U8(ST_A, current_b);
+    return true;
+}
+
+TEST(test_reentrancy_regression_exit_nested_dispatch)
+{
+    test_ctx_t ctx;
+    mfsm_t fsm;
+    mfsm_state_id current = 0u;
+
+    ctx_reset(&ctx);
+    ctx.self = &fsm;
+    ctx.reenter_phase = PHASE_EXIT;
+    ASSERT_STATUS(MFSM_OK, mfsm_init(&fsm, &core_def, &ctx));
+    ASSERT_STATUS(MFSM_OK, mfsm_dispatch(&fsm, EV_GO));
+    ASSERT_STATUS(MFSM_ERR_BUSY, ctx.nested_result);
+    ASSERT_STATUS(MFSM_OK, mfsm_current(&fsm, &current));
+    ASSERT_U8(ST_B, current);
+    ASSERT_UINT(0u, ctx.enters[ST_C]);
+    return true;
+}
+
+TEST(test_harness_side_effect_assertion_once)
+{
+    unsigned int counter = 0u;
+    ASSERT_TRUE((++counter) == 1u);
+    ASSERT_UINT(1u, counter);
+    return true;
+}
+
+int main(void)
+{
+    run_test("test_validate_zero_states", test_validate_zero_states);
+    run_test("test_validate_max_states", test_validate_max_states);
+    run_test("test_validate_excessive_states", test_validate_excessive_states);
+    run_test("test_validate_zero_transitions_with_null_pointer", test_validate_zero_transitions_with_null_pointer);
+    run_test("test_validate_nonzero_transitions_with_null_pointer", test_validate_nonzero_transitions_with_null_pointer);
+    run_test("test_validate_excessive_transitions", test_validate_excessive_transitions);
+    run_test("test_validate_invalid_initial", test_validate_invalid_initial);
+    run_test("test_validate_invalid_source", test_validate_invalid_source);
+    run_test("test_validate_invalid_destination", test_validate_invalid_destination);
+    run_test("test_validate_duplicate_unguarded", test_validate_duplicate_unguarded);
+    run_test("test_validate_exact_guarded_duplicate", test_validate_exact_guarded_duplicate);
+    run_test("test_validate_guarded_priority_chain", test_validate_guarded_priority_chain);
+    run_test("test_validate_unguarded_fallback_final", test_validate_unguarded_fallback_final);
+    run_test("test_validate_shadowed_after_fallback", test_validate_shadowed_after_fallback);
+    run_test("test_validate_disconnected_cycle", test_validate_disconnected_cycle);
+    run_test("test_validate_self_transition_with_unreachable_state", test_validate_self_transition_with_unreachable_state);
+    run_test("test_validate_reachable_graph", test_validate_reachable_graph);
+    run_test("test_init_and_query", test_init_and_query);
+    run_test("test_uninitialized_instance", test_uninitialized_instance);
+    run_test("test_dispatch_order_and_visibility", test_dispatch_order_and_visibility);
+    run_test("test_guard_reject", test_guard_reject);
+    run_test("test_invalid_current_state_fails_closed", test_invalid_current_state_fails_closed);
+    run_test("test_mutated_destination_fails_closed", test_mutated_destination_fails_closed);
+    run_test("test_same_instance_reentrancy_from_init_enter", test_same_instance_reentrancy_from_init_enter);
+    run_test("test_same_instance_reentrancy_from_guard", test_same_instance_reentrancy_from_guard);
+    run_test("test_same_instance_reentrancy_from_exit", test_same_instance_reentrancy_from_exit);
+    run_test("test_same_instance_reentrancy_from_action", test_same_instance_reentrancy_from_action);
+    run_test("test_same_instance_reentrancy_from_enter", test_same_instance_reentrancy_from_enter);
+    run_test("test_same_instance_reentrancy_from_trace", test_same_instance_reentrancy_from_trace);
+    run_test("test_same_instance_reentrancy_from_reset_callbacks", test_same_instance_reentrancy_from_reset_callbacks);
+    run_test("test_nested_different_instance_dispatch", test_nested_different_instance_dispatch);
+    run_test("test_event_255_distinct_from_reset_trace", test_event_255_distinct_from_reset_trace);
+    run_test("test_reset_from_initial_runs_exit_and_enter", test_reset_from_initial_runs_exit_and_enter);
+    run_test("test_multiple_instances_share_definition", test_multiple_instances_share_definition);
+    run_test("test_reentrancy_regression_exit_nested_dispatch", test_reentrancy_regression_exit_nested_dispatch);
+    run_test("test_harness_side_effect_assertion_once", test_harness_side_effect_assertion_once);
+
+    printf("RESULT %u/%u passed, %u failed\n", tests_passed, tests_run, tests_failed);
+    return tests_failed == 0u ? 0 : 1;
 }

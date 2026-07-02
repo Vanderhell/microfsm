@@ -1,7 +1,12 @@
-CC      ?= gcc
-CFLAGS  := -std=c99 -Wall -Wextra -Wpedantic -Werror -I../include
-SRC     := ../src/mfsm.c
-TESTS   := test_all.c
+CC ?= gcc
+CPPFLAGS ?=
+CFLAGS ?=
+LDFLAGS ?=
+
+SRC := ../src/mfsm.c
+TESTS := test_all.c
+WARNINGS := -Wall -Wextra -Wpedantic -Werror
+BASE_CFLAGS := -std=c99 $(WARNINGS)
 
 .PHONY: all clean coverage
 
@@ -9,10 +14,10 @@ all: test_all
 	@./test_all
 
 test_all: $(TESTS) $(SRC) ../include/mfsm.h
-	$(CC) $(CFLAGS) $(SRC) $(TESTS) -o $@
+	$(CC) $(CPPFLAGS) -I../include $(BASE_CFLAGS) $(CFLAGS) $(SRC) $(TESTS) -o $@ $(LDFLAGS)
 
 coverage: $(TESTS) $(SRC) ../include/mfsm.h
-	$(CC) $(CFLAGS) --coverage $(SRC) $(TESTS) -o test_coverage
+	$(CC) $(CPPFLAGS) -I../include $(BASE_CFLAGS) $(CFLAGS) --coverage $(SRC) $(TESTS) -o test_coverage $(LDFLAGS)
 	./test_coverage
 	lcov --capture --directory . --output-file coverage.info
 	genhtml coverage.info --output-directory coverage_html

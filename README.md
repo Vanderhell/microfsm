@@ -1,176 +1,105 @@
 # microfsm
 
-**Deterministic, table-driven finite state machine engine for embedded systems.**
+Table-driven finite state machine engine for C99 applications that need a small, caller-owned runtime object and immutable machine definitions.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Vanderhell/microfsm/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Vanderhell/microfsm/actions/workflows/ci.yml)
-[![Language: C99](https://img.shields.io/badge/language-C99-blue.svg)](#)
-[![Platform: Portable](https://img.shields.io/badge/platform-embedded%20%7C%20desktop-0a7ea4.svg)](#)
-[![Status: Stable API](https://img.shields.io/badge/status-stable%20API-brightgreen.svg)](#)
 
-C99 · Zero dependencies · Zero allocations · ROM-friendly · Portable
+microfsm is not claimed production-ready in this repository snapshot. The API and ABI contract have been tightened, but release evidence, full CI proof, and platform verification still need a maintainer-run audit.
 
----
+## Scope
 
-## Why microfsm?
+- Flat FSMs only. No hierarchy, schedulers, timers, queues, reflection, code generation, or dynamic registration.
+- Caller-owned memory only. The library does not allocate, free, close, unlock, or persist anything.
+- Immutable definitions. State and transition arrays must outlive every `mfsm_t` instance that uses them.
+- Explicit error reporting. Query APIs return status codes instead of ambiguous sentinels.
 
-Every IoT and embedded project reaches a point where device behavior becomes a
-tangled mess of `if/else` chains and boolean flags. A sensor node that must
-boot → connect → authenticate → work → handle errors → reconnect quickly turns
-into unmaintainable spaghetti. **microfsm** replaces that with a clean,
-data-driven state machine that is easy to read, test, and extend.
+## Public contract summary
 
-```
-┌─────────┐   WIFI_OK   ┌───────────┐  AUTH_OK  ┌─────────┐
-│  BOOT   │────────────▶│ CONNECTED │─────────▶│ WORKING │
-└─────────┘              └───────────┘           └─────────┘
-                              ▲         TIMEOUT       │
-                              │    ┌──────────────────┘
-                              │    ▼
-                         ┌───────────┐
-                         │   ERROR   │
-                         └───────────┘
-```
-
-The entire machine above is described in ~20 lines of **const data** — no
-dynamic allocation, no code generation, no external tools.
-
-## Features
-
-- **Table-driven** — states and transitions are const arrays; the engine is
-  generic. Machine definitions can live in ROM/flash.
-- **Guard conditions** — a transition only fires when its optional guard
-  function returns `true`.
-- **Entry / exit actions** — every state can have `on_enter` and `on_exit`
-  callbacks, called automatically during transitions.
-- **Transition actions** — optional one-shot callback fired during a specific
-  transition, between exit and entry.
-- **Trace / debug hooks** — plug in a single callback to log every transition.
-  Disabled at compile time with `MFSM_ENABLE_TRACE 0`.
-- **State names** — human-readable names for debugging. Disabled at compile
-  time with `MFSM_ENABLE_NAMES 0` to save ROM.
-- **Validation** — `mfsm_validate()` checks a definition for common mistakes
-  (duplicate transitions, orphan states, unreachable states) at startup.
-- **Zero dynamic allocation** — everything is stack or static. Safe for
-  bare-metal, RTOS, or any environment without a heap.
-- **C99, zero dependencies** — compiles with gcc, clang, armcc, iccarm, or
-  any conforming C99 compiler.
-- **Portable** — no platform-specific code. Works on Cortex-M0, ESP32,
-  Linux, Windows, macOS.
-- **Small footprint** — the engine itself is ~300 lines of C. Typical
-  compiled size: < 1 KB text, < 100 B RAM per instance.
+- Fixed-width public ABI types:
+  - `mfsm_err_t` is `int32_t`
+  - `mfsm_state_id`, `mfsm_event_id`, and `mfsm_trace_kind_t` are `uint8_t`
+- `mfsm_state_t`, `mfsm_transition_t`, `mfsm_def_t`, and `mfsm_t` keep stable public layouts regardless of `MFSM_ENABLE_NAMES` and `MFSM_ENABLE_TRACE`.
+- `mfsm_init()` validates every successful definition before the instance becomes active.
+- Same-instance reentrancy from callbacks is rejected with `MFSM_ERR_BUSY`.
+- `mfsm_has_transition()` reports table presence only. It does not evaluate guards.
+- Reset tracing uses an explicit trace kind instead of a synthetic event value.
 
 ## Quick start
-
-### 1. Copy into your project
-
-```
-your_project/
-├── lib/
-│   └── microfsm/
-│       ├── include/
-│       │   └── mfsm.h
-│       └── src/
-│           └── mfsm.c
-```
-
-Or add as a Git submodule:
-
-```bash
-git submodule add https://github.com/Vanderhell/microfsm.git lib/microfsm
-```
-
-### 2. Define states and events
 
 ```c
 #include "mfsm.h"
 
-/* States — use an enum for type safety */
 enum {
-    ST_IDLE,
-    ST_CONNECTING,
-    ST_WORKING,
-    ST_ERROR,
-    ST_COUNT          /* always last — gives you the count */
+    ST_IDLE = 0,
+    ST_BUSY = 1,
+    ST_COUNT = 2
 };
 
-/* Events */
 enum {
-    EV_START,
-    EV_CONNECTED,
-    EV_DATA_READY,
-    EV_FAILURE,
-    EV_RETRY,
-    EV_COUNT
+    EV_START = 1,
+    EV_DONE = 2
 };
-```
 
-### 3. Define callbacks (optional)
+typedef struct {
+    unsigned int completed;
+} app_ctx_t;
 
-```c
-static void on_enter_connecting(void *ctx) {
-    printf("Connecting to broker...\n");
-    /* start WiFi/MQTT connect */
+static void on_enter_busy(void *user_data)
+{
+    app_ctx_t *ctx = (app_ctx_t *)user_data;
+    ctx->completed = 0u;
 }
 
-static void on_exit_error(void *ctx) {
-    printf("Leaving error state, resetting counters.\n");
+static void on_done(void *user_data)
+{
+    app_ctx_t *ctx = (app_ctx_t *)user_data;
+    ctx->completed += 1u;
 }
 
-static bool guard_can_retry(void *ctx) {
-    my_device_t *dev = (my_device_t *)ctx;
-    return dev->retry_count < 5;
-}
-```
-
-### 4. Build the machine definition
-
-```c
 static const mfsm_state_t states[] = {
-    [ST_IDLE]       = { .name = "IDLE"       },
-    [ST_CONNECTING] = { .name = "CONNECTING", .on_enter = on_enter_connecting },
-    [ST_WORKING]    = { .name = "WORKING"    },
-    [ST_ERROR]      = { .name = "ERROR",     .on_exit  = on_exit_error       },
+    MFSM_STATE(NULL, NULL, "IDLE"),
+    MFSM_STATE(on_enter_busy, NULL, "BUSY")
 };
 
 static const mfsm_transition_t transitions[] = {
-    { ST_IDLE,       EV_START,      ST_CONNECTING, NULL,            NULL },
-    { ST_CONNECTING, EV_CONNECTED,  ST_WORKING,    NULL,            NULL },
-    { ST_WORKING,    EV_FAILURE,    ST_ERROR,      NULL,            NULL },
-    { ST_ERROR,      EV_RETRY,      ST_CONNECTING, guard_can_retry, NULL },
+    MFSM_TRANSITION(ST_IDLE, EV_START, ST_BUSY, NULL, NULL),
+    MFSM_TRANSITION(ST_BUSY, EV_DONE, ST_IDLE, NULL, on_done)
 };
 
-static const mfsm_def_t machine_def = {
-    .states          = states,
-    .num_states      = ST_COUNT,
-    .transitions     = transitions,
-    .num_transitions = sizeof(transitions) / sizeof(transitions[0]),
-    .initial         = ST_IDLE,
-};
-```
+static const mfsm_def_t definition =
+    MFSM_DEF(states, transitions, ST_COUNT, 2u, ST_IDLE);
 
-### 5. Run it
-
-```c
-int main(void) {
-    my_device_t device = { .retry_count = 0 };
-
+int main(void)
+{
+    app_ctx_t ctx = {0u};
     mfsm_t fsm;
-    mfsm_init(&fsm, &machine_def, &device);
+    mfsm_state_id current = 0u;
+    const char *name = NULL;
 
-    /* on_enter for IDLE fires here */
-    printf("Current: %s\n", mfsm_state_name(&fsm));   /* "IDLE" */
+    if (mfsm_validate(&definition) != MFSM_OK) {
+        return 1;
+    }
 
-    mfsm_dispatch(&fsm, EV_START);       /* IDLE → CONNECTING */
-    mfsm_dispatch(&fsm, EV_CONNECTED);   /* CONNECTING → WORKING */
-    mfsm_dispatch(&fsm, EV_FAILURE);     /* WORKING → ERROR */
+    if (mfsm_init(&fsm, &definition, &ctx) != MFSM_OK) {
+        return 1;
+    }
 
-    device.retry_count = 3;
-    mfsm_dispatch(&fsm, EV_RETRY);       /* ERROR → CONNECTING (guard passes) */
+    if (mfsm_dispatch(&fsm, EV_START) != MFSM_OK) {
+        return 1;
+    }
 
-    device.retry_count = 5;
-    mfsm_err_t err = mfsm_dispatch(&fsm, EV_RETRY);
-    /* err == MFSM_ERR_GUARD_REJECTED — guard_can_retry returned false */
+    if (mfsm_current(&fsm, &current) != MFSM_OK || current != ST_BUSY) {
+        return 1;
+    }
+
+    if (mfsm_state_name(&fsm, &name) != MFSM_OK || name == NULL) {
+        return 1;
+    }
+
+    if (mfsm_dispatch(&fsm, EV_DONE) != MFSM_OK) {
+        return 1;
+    }
 
     return 0;
 }
@@ -178,97 +107,73 @@ int main(void) {
 
 ## Configuration
 
-All options are compile-time `#define`s. Override them before including the
-header or via compiler flags (`-DMFSM_MAX_STATES=16`).
+The installed package provides an authoritative generated `mfsm_config.h`. Consumers must not override it with conflicting values.
 
-| Macro                | Default | Description                                 |
-|----------------------|---------|---------------------------------------------|
-| `MFSM_MAX_STATES`   | 32      | Maximum states per definition (uint8 range) |
-| `MFSM_MAX_TRANSITIONS` | 64   | Maximum transitions per definition          |
-| `MFSM_ENABLE_TRACE` | 1       | Enable trace hook (set 0 to strip code)     |
-| `MFSM_ENABLE_NAMES` | 1       | Enable state name strings (set 0 for ROM)   |
-| `MFSM_ASSERT(expr)` | (none)  | Custom assert macro, e.g. `configASSERT`    |
+| Macro | Meaning | Source-tree default |
+| --- | --- | --- |
+| `MFSM_ENABLE_NAMES` | `0` disables state-name queries and returns `MFSM_ERR_UNSUPPORTED` | `1` |
+| `MFSM_ENABLE_TRACE` | `0` disables trace registration and dispatch-time trace callbacks | `1` |
+| `MFSM_MAX_STATES` | definition limit validated at init and validation time | `32` |
+| `MFSM_MAX_TRANSITIONS` | definition limit validated at init and validation time | `64` |
 
-## API at a glance
+## Support matrix
 
-| Function              | Description                                    |
-|-----------------------|------------------------------------------------|
-| `mfsm_init`          | Initialise instance, enter initial state       |
-| `mfsm_dispatch`      | Send event — may trigger a transition          |
-| `mfsm_current`       | Get current state ID                           |
-| `mfsm_state_name`    | Get current state name (if names enabled)      |
-| `mfsm_can_handle`    | Check if an event has a valid transition       |
-| `mfsm_reset`         | Re-enter initial state (calls exit + enter)    |
-| `mfsm_set_trace`     | Register trace callback                        |
-| `mfsm_validate`      | Check definition for structural errors         |
-| `mfsm_err_str`       | Error code to human-readable string            |
+| Area | Status |
+| --- | --- |
+| C99 library build | Implemented |
+| C11 library build | Intended through CMake and CI |
+| C++ consumers | Implemented examples for C++11, C++17, and C++20 |
+| GCC / Clang / MSVC | Intended through CI workflows |
+| ARM cross compilation | Compile-only workflow coverage planned |
+| Names-disabled build | Supported by generated config |
+| Trace-disabled build | Supported by generated config |
+| Independent-instance concurrency | Supported when shared definitions and callbacks are immutable and thread-safe |
+| Shared-instance concurrency | Requires external serialization around the whole call, including callbacks |
+| ISR dispatch/reset/init | Not supported; queue events and dispatch later |
+| Real hardware execution | Not verified in this repository snapshot |
 
-Full reference: **[docs/API_REFERENCE.md](docs/API_REFERENCE.md)**
+## Execution limits
+
+- One execution context owns one `mfsm_t` at a time unless the application serializes all access externally.
+- `mfsm_init()`, `mfsm_dispatch()`, and `mfsm_reset()` run callbacks synchronously.
+- Same-instance nested `init`, `dispatch`, `reset`, or `mfsm_set_trace()` from callbacks returns `MFSM_ERR_BUSY`.
+- `longjmp`, asynchronous escapes, process termination, hard faults, power loss, and similar events have no cleanup or rollback semantics.
+- Action callbacks are `void`. The library does not roll back application side effects.
+
+## Build and package
+
+### CMake
+
+```cmake
+find_package(microfsm CONFIG REQUIRED)
+
+add_executable(app main.c)
+target_link_libraries(app PRIVATE microfsm::microfsm)
+```
+
+### add_subdirectory
+
+```cmake
+add_subdirectory(path/to/microfsm microfsm-build)
+target_link_libraries(app PRIVATE microfsm::microfsm)
+```
 
 ## Documentation
 
-| Document                                              | Content                            |
-|-------------------------------------------------------|------------------------------------|
-| [API Reference](docs/API_REFERENCE.md)                | Every function, type, and macro    |
-| [Design Rationale](docs/DESIGN.md)                    | Architecture decisions and tradeoffs |
-| [Porting Guide](docs/PORTING_GUIDE.md)                | How to integrate on any platform   |
-| [Examples](docs/EXAMPLES.md)                          | Real-world usage patterns          |
+- [API reference](docs/API_REFERENCE.md)
+- [Cookbook](docs/COOKBOOK.md)
+- [Design notes](docs/DESIGN.md)
+- [Porting guide](docs/PORTING_GUIDE.md)
+- [Troubleshooting](docs/ISSUES.md)
+- [Verification status](docs/VERIFICATION.md)
+- [Release policy](docs/RELEASES.md)
+- [Changelog](CHANGELOG.md)
 
-## GitHub readiness
+## Release status
 
-- Clear MIT licensing with copyright owned by Vanderhell
-- Public API in `include/mfsm.h`
-- Implementation isolated in `src/mfsm.c`
-- Tests in `tests/`
-- Extended documentation in `docs/`
-- Contribution guide and changelog included
-- Community guidelines in `CODE_OF_CONDUCT.md`
-- GitHub Actions CI for GCC and Clang
-- Repository-safe `.gitignore` for C, coverage, and editor artifacts
-
-## Building the tests
-
-```bash
-cd tests
-make            # builds and runs all tests
-make coverage   # generates lcov report
-```
-
-Requires only a C99 compiler (gcc or clang) and make.
-
-## Project structure
-
-```
-microfsm/
-├── include/
-│   └── mfsm.h              # public header (only file you include)
-├── src/
-│   └── mfsm.c              # implementation (~300 lines)
-├── tests/
-│   ├── test_all.c          # consolidated test suite
-│   └── Makefile
-├── examples/
-│   └── README.md           # points to documented examples
-├── docs/
-│   ├── API_REFERENCE.md
-│   ├── DESIGN.md
-│   ├── PORTING_GUIDE.md
-│   └── EXAMPLES.md
-├── .gitignore
-├── README.md
-├── CHANGELOG.md
-├── CODE_OF_CONDUCT.md
-├── CONTRIBUTING.md
-├── git.txt
-└── LICENSE
-```
-
-## Repository metadata
-
-- Suggested GitHub repository name: `microfsm`
-- Short description: `Deterministic table-driven finite state machine engine for embedded systems in portable C99.`
-- Suggested topics: `c`, `c99`, `embedded`, `embedded-systems`, `finite-state-machine`, `fsm`, `state-machine`, `library`, `zero-allocation`, `bare-metal`, `iot`, `microcontroller`
+- Releases are tag-driven through [`.github/workflows/release.yml`](.github/workflows/release.yml).
+- No local Git tags were present in this repository state before the audit work, so `CHANGELOG.md` keeps all corrective work under `Unreleased`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

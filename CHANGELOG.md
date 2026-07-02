@@ -1,25 +1,16 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The repository does not currently prove a released tag. No local tag matched a published version in the audited repository state, so corrective work remains under `Unreleased`.
 
-## [1.0.0] — 2026-03-20
+## Unreleased
 
-### Added
+### Changed
 
-- Core state machine engine: `mfsm_init`, `mfsm_dispatch`, `mfsm_reset`.
-- Query functions: `mfsm_current`, `mfsm_state_name`, `mfsm_can_handle`.
-- Guard conditions on transitions.
-- Entry / exit / transition action callbacks.
-- Trace hook for debugging (`mfsm_set_trace`).
-- Definition validation (`mfsm_validate`).
-- Human-readable error strings (`mfsm_err_str`).
-- Compile-time configuration macros.
-- Optional state name strings (`MFSM_ENABLE_NAMES`).
-- Optional trace support (`MFSM_ENABLE_TRACE`).
-- Custom assert macro (`MFSM_ASSERT`).
-- Full documentation: API reference, design rationale, porting guide, examples.
-- Test suite: core, guards, actions, validation, edge cases.
-- Examples: MQTT device, LED blink, traffic light.
+- Replaced compiler-dependent public error enums with fixed-width ABI types and fixed values.
+- Added an authoritative generated configuration header contract for source and installed consumers.
+- Stabilized public struct layouts across names-enabled, names-disabled, trace-enabled, and trace-disabled builds.
+- Reworked initialization, validation, runtime state checks, query APIs, reset semantics, tracing, and same-instance reentrancy handling.
+- Added CMake package support, standalone consumer fixtures, compile-fail fixtures, and expanded CI and release workflows.
+- Rewrote repository documentation to reflect current limits, verification status, and tag-based release policy.

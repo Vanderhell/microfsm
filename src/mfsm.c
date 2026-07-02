@@ -9,6 +9,8 @@
 #include <string.h>
 
 #define MFSM_RESET_EVENT_SENTINEL ((mfsm_event_id)0u)
+#define MFSM_INSTANCE_MAGIC0 ((uint8_t)0x4d)
+#define MFSM_INSTANCE_MAGIC1 ((uint8_t)0x46)
 
 #ifdef MFSM_ASSERT
 #define MFSM_DIAG_ASSERT(expr_) MFSM_ASSERT(expr_)
@@ -34,6 +36,13 @@ static bool mfsm_transition_equal(
            lhs->to == rhs->to &&
            lhs->guard == rhs->guard &&
            lhs->action == rhs->action;
+}
+
+static bool mfsm_instance_is_initialized(const mfsm_t *fsm)
+{
+    return fsm->initialized == 1u &&
+           fsm->reserved[0] == MFSM_INSTANCE_MAGIC0 &&
+           fsm->reserved[1] == MFSM_INSTANCE_MAGIC1;
 }
 
 static void mfsm_call_action(mfsm_action_fn fn, void *user_data)
@@ -164,7 +173,7 @@ static mfsm_err_t mfsm_require_instance(
 
     MFSM_RETURN_NULL(fsm);
 
-    if (!fsm->initialized) {
+    if (!mfsm_instance_is_initialized(fsm)) {
         return MFSM_ERR_UNINITIALIZED;
     }
 
@@ -226,7 +235,7 @@ mfsm_err_t mfsm_init(mfsm_t *fsm, const mfsm_def_t *def, void *user_data)
 
     MFSM_RETURN_NULL(fsm);
 
-    if (fsm->busy) {
+    if (mfsm_instance_is_initialized(fsm) && fsm->busy) {
         return MFSM_ERR_BUSY;
     }
 
@@ -242,6 +251,8 @@ mfsm_err_t mfsm_init(mfsm_t *fsm, const mfsm_def_t *def, void *user_data)
     fsm->current = def->initial;
     fsm->initialized = 1u;
     fsm->busy = 1u;
+    fsm->reserved[0] = MFSM_INSTANCE_MAGIC0;
+    fsm->reserved[1] = MFSM_INSTANCE_MAGIC1;
 
     mfsm_call_action(def->states[def->initial].on_enter, user_data);
 
@@ -393,7 +404,7 @@ mfsm_err_t mfsm_set_trace(mfsm_t *fsm, mfsm_trace_fn fn)
 {
     MFSM_RETURN_NULL(fsm);
 
-    if (!fsm->initialized) {
+    if (!mfsm_instance_is_initialized(fsm)) {
         return MFSM_ERR_UNINITIALIZED;
     }
 

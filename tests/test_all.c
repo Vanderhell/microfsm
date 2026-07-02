@@ -75,10 +75,11 @@ static bool fail_at(const char *message, int line)
 
 #define ASSERT_STR(expected, actual) \
     do { \
+        const char *expected_value__ = (expected); \
         const char *actual_value__ = (actual); \
-        if (((expected) == NULL && actual_value__ != NULL) || \
-            ((expected) != NULL && actual_value__ == NULL) || \
-            ((expected) != NULL && strcmp((expected), actual_value__) != 0)) { \
+        if ((expected_value__ == NULL && actual_value__ != NULL) || \
+            (expected_value__ != NULL && actual_value__ == NULL) || \
+            (expected_value__ != NULL && strcmp(expected_value__, actual_value__) != 0)) { \
             return fail_at("string mismatch", __LINE__); \
         } \
     } while (0)
@@ -309,7 +310,8 @@ TEST(test_validate_zero_states)
 TEST(test_validate_max_states)
 {
     mfsm_state_t states[MFSM_MAX_STATES];
-    const mfsm_def_t def = make_def(states, (uint16_t)MFSM_MAX_STATES, NULL, 0u, 0u);
+    mfsm_transition_t transitions[MFSM_MAX_STATES - 1u];
+    mfsm_def_t def;
     uint16_t i;
 
     memset(states, 0, sizeof(states));
@@ -317,6 +319,11 @@ TEST(test_validate_max_states)
         states[i].name = "S";
     }
 
+    for (i = 0u; i < (uint16_t)(MFSM_MAX_STATES - 1u); ++i) {
+        transitions[i] = MFSM_TRANSITION((mfsm_state_id)i, EV_GO, (mfsm_state_id)(i + 1u), NULL, NULL);
+    }
+
+    def = make_def(states, (uint16_t)MFSM_MAX_STATES, transitions, (uint16_t)(MFSM_MAX_STATES - 1u), 0u);
     ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
     return true;
 }
@@ -330,7 +337,7 @@ TEST(test_validate_excessive_states)
 
 TEST(test_validate_zero_transitions_with_null_pointer)
 {
-    const mfsm_def_t def = make_def(core_states, 3u, NULL, 0u, ST_A);
+    const mfsm_def_t def = make_def(core_states, 1u, NULL, 0u, ST_A);
     ASSERT_STATUS(MFSM_OK, mfsm_validate(&def));
     return true;
 }
@@ -586,9 +593,10 @@ TEST(test_invalid_current_state_fails_closed)
 TEST(test_mutated_destination_fails_closed)
 {
     mfsm_transition_t transitions[] = {
-        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL)
+        MFSM_TRANSITION(ST_A, EV_GO, ST_B, NULL, NULL),
+        MFSM_TRANSITION(ST_B, EV_GO, ST_C, NULL, NULL)
     };
-    mfsm_def_t def = make_def(core_states, 3u, transitions, 1u, ST_A);
+    mfsm_def_t def = make_def(core_states, 3u, transitions, 2u, ST_A);
     test_ctx_t ctx;
     mfsm_t fsm;
 

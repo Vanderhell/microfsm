@@ -8,6 +8,8 @@ function(mfsm_add_compile_fail_test name source expected_regex)
             "-DINCLUDE_DIR=${PROJECT_SOURCE_DIR}/include"
             "-DGENERATED_INCLUDE_DIR=${MFSM_GENERATED_INCLUDE_DIR}"
             "-DEXPECTED_REGEX=${expected_regex}"
+            "-DCOMPILER_PATH=${CMAKE_C_COMPILER}"
+            "-DCOMPILER_ID=${CMAKE_C_COMPILER_ID}"
             "-P"
             "${CMAKE_CURRENT_SOURCE_DIR}/check_compile_fail.cmake"
     )
